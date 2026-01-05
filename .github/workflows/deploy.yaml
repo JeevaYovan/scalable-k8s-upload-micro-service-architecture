@@ -3,15 +3,12 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [ "" ]
-
 env:
   ECR_REGISTRY: 123456789.dkr.ecr.us-east-1.amazonaws.com
   APP_NAME: laravel-app
-  # GENERATE A UNIQUE VERSION TAG BASED ON GIT COMMIT
-  IMAGE_TAG: ${{ github.sha }} 
+  IMAGE_TAG: ${{ github.sha }}
 
 jobs:
-  # --- STAGE 1: CI (Test & Build) ---
   integration:
     runs-on: ubuntu-latest
     steps:
@@ -23,7 +20,7 @@ jobs:
         with:
           php-version: '8.2'
 
-      - name: Run Tests
+      - name: Install Dependencies & Run Tests
         run: |
           composer install -q --no-ansi --no-interaction --no-scripts --no-progress
           php artisan test
@@ -43,35 +40,39 @@ jobs:
           aws-region: us-east-1
 
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v1
 
-      - name: Build, Tag, and Push Image
+      - name: Build and Push Docker Image
         run: |
-          # Build the image and tag it with the Git SHA
           docker build -t $ECR_REGISTRY/$APP_NAME:$IMAGE_TAG .
           docker push $ECR_REGISTRY/$APP_NAME:$IMAGE_TAG
 
-  # --- STAGE 2: CD (Deploy) ---
   deploy-production:
     needs: build-push
     runs-on: ubuntu-latest
-    environment: production # Requires manual approval in GitHub settings
+    environment: production   # Manual approval enabled
     steps:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Update Kubeconfig
-        run: aws eks update-kubeconfig --name my-cluster --region us-east-1
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
 
-      - name: Install/Upgrade via Helm
-        # This command handles both Installs (first time) and Upgrades (future times)
-        # It injects the specific image tag we just built
+      - name: Update kubeconfig
         run: |
-          helm upgrade --install laravel-app ./k8s/helm-chart \
-            --set image.repository=$ECR_REGISTRY/$APP_NAME \
-            --set image.tag=$IMAGE_TAG \
-            --values ./k8s/helm-chart/values-prod.yaml \
-            --namespace production \
-            --atomic \
-            --wait
+          aws eks update-kubeconfig --name my-cluster --region us-east-1
+
+      - name: Update Image Tag in Kubernetes Manifests
+        run: |
+          sed -i "s|image: .*laravel-app:.*|image: $ECR_REGISTRY/$APP_NAME:$IMAGE_TAG|g" k8s/laravel-api.yaml
+          sed -i "s|image: .*laravel-app:.*|image: $ECR_REGISTRY/$APP_NAME:$IMAGE_TAG|g" k8s/laravel-worker.yaml
+
+      - name: Apply Kubernetes Manifests
+        run: |
+          kubectl apply -f k8s/
+          kubectl rollout status deployment/laravel-api -n production
+          kubectl rollout status deployment/laravel-worker -n production
