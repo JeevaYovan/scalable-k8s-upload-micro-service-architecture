@@ -1,6 +1,6 @@
-# Scalable Laravel Architecture on Kubernetes
+# Scalable K8s Upload Micro Service Architecture
 
-This repository contains the infrastructure solution for migrating a legacy **Laravel** application to a cloud-native, scalable **Kubernetes** architecture.
+This repository contains the infrastructure solution for a scalable K8s upload micro service  **Laravel** application to a cloud-native scalable **Kubernetes** architecture.
 
 The design addresses two major bottlenecks **without requiring changes to application business logic**:
 
@@ -14,17 +14,17 @@ The design addresses two major bottlenecks **without requiring changes to applic
 | File | Purpose |
 | :--- | :--- |
 | **`Dockerfile`** | Multi-stage build that installs system dependencies (Redis, BCMath), sets secure permissions, and runs the container as a non-root user (`www-data`). |
-| **`k8s/laravel-config.yaml`** | Stores non-sensitive configuration (`APP_ENV`) in a ConfigMap and sensitive data (`DB_PASSWORD`) in a Secret (base64 encoded). |
+| **`k8s/laravel-config.yaml`** | Stores non-sensitive configuration (`APP_ENV`) in a ConfigMap. |
 | **`k8s/laravel-api.yaml`** | Deploys the Laravel Web API with `replicas: 2`, liveness probes for self-healing, and strict CPU limits to prevent resource starvation. |
 | **`k8s/laravel-worker.yaml`** | Deploys Laravel Horizon workers with `terminationGracePeriodSeconds: 60` and `preStop` hooks to ensure active jobs complete safely. |
-| **`k8s/01-storage.yaml`** | Configures a **ReadWriteMany (RWX)** Persistent Volume backed by **AWS EFS** for shared file access across nodes. |
+| **`k8s/storage.yaml`** | Configures a **ReadWriteMany (RWX)** Persistent Volume backed by **AWS EFS** for shared file access across nodes. |
 | **`k8s/autoscaling.yaml`** | Configures **HPA** for API autoscaling (CPU-based) and **KEDA** for worker autoscaling (Redis queue depth). |
 | **`k8s/cleaner.yaml`** | Scheduled CronJob to remove orphaned temporary files from shared storage in case of worker crashes. |
 
 ---
 
 ## 1. Architectural Overview
-
+![Scalable Kubernetes Laravel Upload Architecture](k8s/Architecture.png)
 ### Key Design Decisions
 
 #### 1. Workload Separation
@@ -65,8 +65,7 @@ This preserves legacy behavior while enabling horizontal scaling.
 | :--- | :--- | :--- |
 | **Compute** | Amazon EKS | Managed Kubernetes cluster |
 | **Storage** | Amazon EFS | Shared RWX storage for temporary files |
-| **Queue / Cache** | Amazon ElastiCache (Redis) | Job queues & caching |
-| **Database** | Amazon RDS | Managed MySQL / PostgreSQL |
+| **Queue / Cache** | Redis | Job queues & caching |
 | **Auto-scaling** | HPA + KEDA | Resource-based + event-driven scaling |
 
 ---
@@ -87,41 +86,26 @@ The repository includes `.github/workflows/deploy.yaml` demonstrating the deploy
 
 ---
 
-### Continuous Delivery (CD) with Helm
+### Continuous Delivery (CD) Using Kubernetes Manifests
 
-While raw Kubernetes manifests are included for architectural clarity, **production deployments use Helm**.
+All production deployments are performed using declarative Kubernetes manifests applied via **kubectl apply**.
 
-Helm ensures:
-- Atomic deployments
-- Safe rollbacks
-- Environment-specific configuration overrides
+This approach ensures transparency, predictability, and fine-grained control over infrastructure changes without relying on Helm templating.
 
-#### Example Helm Deployment
+**Deployment Characteristics**
 
-helm upgrade --install laravel-app ./charts/laravel \
-  --set image.tag=${GITHUB_SHA} \
-  --values ./charts/laravel/values-env.yaml \
-  --atomic
-
-## Atomic Deployments
-
-If new pods fail to start (for example, due to an application crash), **Helm automatically rolls back** to the last stable release.  
-This ensures zero-downtime deployments and protects production stability.
+- Declarative deployments using Kubernetes YAML manifests
+- Rolling updates handled natively by Kubernetes Deployments
+- Immutable Docker images, versioned using Git commit SHA
+- Manual production approval enforced via GitHub Environments
 
 ---
 
-## Consistent Delivery
-
-The **same Docker image** is promoted from **Staging → Production**, with **only configuration values changing**.  
-This guarantees consistency across environments and eliminates “works in staging but not prod” issues.
-
----
-
-## 4. Manual Deployment Instructions (For Evaluation)
+## 4. Manual Deployment Instructions
 
 For testing or evaluation purposes, the application can be deployed directly using raw Kubernetes manifests.
 
-### Apply Storage & Configuration
+### Apply Storage & Configuration Files
 
 ```bash
 # Deploy Workloads
